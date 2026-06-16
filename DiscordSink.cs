@@ -145,6 +145,7 @@ namespace Serilog.Sinks.Discord
             }
             return sb.ToString();
         }
+
         private static void SpecifyEmbedLevel(LogEventLevel level, EmbedBuilder embedBuilder)
         {
             switch (level)
@@ -173,25 +174,23 @@ namespace Serilog.Sinks.Discord
                     embedBuilder.Title = ":skull_crossbones: Fatal";
                     embedBuilder.Color = Color.DarkRed;
                     break;
-                default:
-                    break;
             }
         }
 
-        public static string FormatMessage(string message, int maxLenght)
+        public static string FormatMessage(string message, int maxLength)
         {
-            if (message.Length > maxLenght)
-                message = $"{message.Substring(0, maxLenght)} ...";
+            if (string.IsNullOrWhiteSpace(message))
+                return null;
 
-            if (!string.IsNullOrWhiteSpace(message))
-                message = $"```{message}```";
+            if (message.Length > maxLength)
+                message = $"{message.Substring(0, maxLength)} ...";
 
-            return message;
+            return $"```{message}```";
         }
 
         private static bool ShouldLogMessage(
             LogEventLevel minimumLogEventLevel,
             LogEventLevel messageLogEventLevel) =>
-                (int)messageLogEventLevel < (int)minimumLogEventLevel ? false : true;
+                (int)messageLogEventLevel >= (int)minimumLogEventLevel;
     }
 }
