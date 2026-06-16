@@ -1,8 +1,9 @@
-﻿using Discord;
+using Discord;
 using Discord.Webhook;
 using Serilog.Core;
 using Serilog.Events;
 using System;
+using System.Text;
 
 namespace Serilog.Sinks.Discord
 {
@@ -12,17 +13,20 @@ namespace Serilog.Sinks.Discord
         private readonly UInt64 _webhookId;
         private readonly string _webhookToken;
         private readonly LogEventLevel _restrictedToMinimumLevel;
+        private readonly DiscordSinkOptions _options;
 
         public DiscordSink(
             IFormatProvider formatProvider,
             UInt64 webhookId,
             string webhookToken,
-            LogEventLevel restrictedToMinimumLevel = LogEventLevel.Information)
+            LogEventLevel restrictedToMinimumLevel = LogEventLevel.Information,
+            DiscordSinkOptions options = null)
         {
             _formatProvider = formatProvider;
             _webhookId = webhookId;
             _webhookToken = webhookToken;
             _restrictedToMinimumLevel = restrictedToMinimumLevel;
+            _options = options;
         }
 
         public void Emit(LogEvent logEvent)
@@ -40,39 +44,79 @@ namespace Serilog.Sinks.Discord
 
             try
             {
+                SpecifyEmbedLevel(logEvent.Level, embedBuilder);
+
                 if (logEvent.Exception != null)
                 {
-                    embedBuilder.Color = new Color(255, 0, 0);
-                    embedBuilder.WithTitle(":o: Exception");
                     embedBuilder.AddField("Type:", $"```{logEvent.Exception.GetType().FullName}```");
 
-                    var message = FormatMessage(logEvent.Exception.Message, 1000);
-                    embedBuilder.AddField("Message:", message);
+                    var exMessage = FormatMessage(logEvent.Exception.Message, 1000);
+                    if (exMessage != null)
+                        embedBuilder.AddField("Message:", exMessage);
+
+                    if (_options != null && _options.IncludeLogMessage)
+                    {
+                        var logMessage = FormatMessage(logEvent.RenderMessage(_formatProvider), 1000);
+                        if (logMessage != null)
+                            embedBuilder.AddField("Log Message:", logMessage);
+                    }
+
+                    if (_options != null && _options.IncludeInnerExceptions && logEvent.Exception.InnerException != null)
+                    {
+                        var inner = FormatMessage(BuildInnerExceptionChain(logEvent.Exception.InnerException), 1000);
+                        if (inner != null)
+                            embedBuilder.AddField("Caused by:", inner);
+                    }
+
+                    if (_options != null && _options.IncludeSourceContext)
+                    {
+                        var source = GetProperty(logEvent, "SourceContext");
+                        if (source != null)
+                            embedBuilder.AddField("Source:", $"`{source}`");
+                    }
+
+                    if (_options != null && _options.PropertyFields != null)
+                    {
+                        foreach (var propName in _options.PropertyFields)
+                        {
+                            var val = GetProperty(logEvent, propName);
+                            if (val != null)
+                                embedBuilder.AddField(propName + ":", $"`{val}`", inline: true);
+                        }
+                    }
 
                     var stackTrace = FormatMessage(logEvent.Exception.StackTrace, 1000);
-                    embedBuilder.AddField("StackTrace:", stackTrace);
-
-                    webHook.SendMessageAsync(null, false, new Embed[] { embedBuilder.Build() })
-                        .GetAwaiter()
-                        .GetResult();
+                    if (stackTrace != null)
+                        embedBuilder.AddField("StackTrace:", stackTrace);
                 }
                 else
                 {
-                    var message = logEvent.RenderMessage(_formatProvider);
+                    var message = FormatMessage(logEvent.RenderMessage(_formatProvider), 1000);
 
-                    message = FormatMessage(message, 240);
+                    if (_options != null && _options.IncludeSourceContext)
+                    {
+                        var source = GetProperty(logEvent, "SourceContext");
+                        if (source != null)
+                            embedBuilder.AddField("Source:", $"`{source}`");
+                    }
 
-                    SpecifyEmbedLevel(logEvent.Level, embedBuilder);
+                    if (_options != null && _options.PropertyFields != null)
+                    {
+                        foreach (var propName in _options.PropertyFields)
+                        {
+                            var val = GetProperty(logEvent, propName);
+                            if (val != null)
+                                embedBuilder.AddField(propName + ":", $"`{val}`", inline: true);
+                        }
+                    }
 
                     embedBuilder.Description = message;
-
-                    webHook.SendMessageAsync(
-                        null, false, new Embed[] { embedBuilder.Build() })
-                        .GetAwaiter()
-                        .GetResult();
                 }
-            }
 
+                webHook.SendMessageAsync(null, false, new Embed[] { embedBuilder.Build() })
+                    .GetAwaiter()
+                    .GetResult();
+            }
             catch (Exception ex)
             {
                 webHook.SendMessageAsync(
@@ -80,6 +124,26 @@ namespace Serilog.Sinks.Discord
                     .GetAwaiter()
                     .GetResult();
             }
+        }
+
+        private static string GetProperty(LogEvent logEvent, string name)
+        {
+            if (logEvent.Properties.TryGetValue(name, out var val))
+                return val.ToString().Trim('"');
+            return null;
+        }
+
+        private static string BuildInnerExceptionChain(Exception ex)
+        {
+            var sb = new StringBuilder();
+            while (ex != null)
+            {
+                if (sb.Length > 0)
+                    sb.Append(" → ");
+                sb.Append(ex.Message);
+                ex = ex.InnerException;
+            }
+            return sb.ToString();
         }
         private static void SpecifyEmbedLevel(LogEventLevel level, EmbedBuilder embedBuilder)
         {
