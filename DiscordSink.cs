@@ -119,11 +119,32 @@ namespace Serilog.Sinks.Discord
             }
             catch (Exception ex)
             {
-                webHook.SendMessageAsync(
-                    $"ooo snap, {ex.Message}", false)
+                // Swallow deserialization errors — these occur when Discord.Net fails to parse
+                // the API response after a successful send (e.g. unknown/changed fields).
+                // The message was already delivered; reporting it as a failure is misleading.
+                if (IsDeserializationError(ex))
+                    return;
+
+                webHook.SendMessageAsync($"ooo snap, {ex.Message}", false)
                     .GetAwaiter()
                     .GetResult();
             }
+        }
+
+        private static bool IsDeserializationError(Exception ex)
+        {
+            // Walk the exception chain looking for JSON/serialization errors
+            var current = ex;
+            while (current != null)
+            {
+                var typeName = current.GetType().FullName ?? string.Empty;
+                if (typeName.Contains("Json") || typeName.Contains("Serializ"))
+                    return true;
+                if (current.Message.Contains("Error getting value") || current.Message.Contains("Error setting value"))
+                    return true;
+                current = current.InnerException;
+            }
+            return false;
         }
 
         private static string GetProperty(LogEvent logEvent, string name)
